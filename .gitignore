@@ -1,0 +1,9 @@
+
+node_modules
+dist
+.DS_Store
+
+# Gitignore local media files
+public/audio/*
+!public/audio/.gitkeep
+

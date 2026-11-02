@@ -1,0 +1,122 @@
+
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Focus Tracker</title>
+</head>
+<body class="bg-zinc-100 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 min-h-screen flex flex-col justify-between p-6">
+  
+  <!-- Header / Controls Bar -->
+  <header class="flex justify-between items-center max-w-xl w-full mx-auto">
+    <h1 class="text-xs uppercase tracking-widest font-semibold text-zinc-500 dark:text-zinc-400">Protocol Engine</h1>
+    <button id="themeToggleBtn" class="p-2 rounded-lg border border-zinc-300 dark:border-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-900 transition-colors">
+      <span id="themeIcon" class="text-sm">☀️</span>
+    </button>
+  </header>
+
+  <!-- Main Timer Module -->
+  <main class="max-w-xl w-full mx-auto space-y-6">
+    
+    <!-- Presets -->
+    <div class="grid grid-cols-3 gap-2">
+      <button data-preset="huberman" class="preset-btn py-2 px-3 text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-800 hover:border-zinc-500 transition-colors">
+        Huberman (90/20)
+      </button>
+      <button data-preset="pomodoro" class="preset-btn py-2 px-3 text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-800 hover:border-zinc-500 transition-colors">
+        Pomodoro (25/5)
+      </button>
+      <button data-preset="5217" class="preset-btn py-2 px-3 text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-800 hover:border-zinc-500 transition-colors">
+        Rule 52 / 17
+      </button>
+    </div>
+
+    <!-- Parameter Adjusters -->
+    <div class="grid grid-cols-3 gap-3 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 shadow-sm">
+      <label class="flex flex-col text-xs text-zinc-500 dark:text-zinc-400">
+        Focus (min)
+        <input id="workDurationInput" type="number" min="1" max="180" value="90" class="mt-1 p-2 rounded border border-zinc-200 dark:border-zinc-700 bg-transparent text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-zinc-500" />
+      </label>
+      <label class="flex flex-col text-xs text-zinc-500 dark:text-zinc-400">
+        Break (min)
+        <input id="breakDurationInput" type="number" min="1" max="60" value="20" class="mt-1 p-2 rounded border border-zinc-200 dark:border-zinc-700 bg-transparent text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-zinc-500" />
+      </label>
+      <label class="flex flex-col text-xs text-zinc-500 dark:text-zinc-400">
+        Target Cycles
+        <input id="cyclesInput" type="number" min="1" max="24" value="3" class="mt-1 p-2 rounded border border-zinc-200 dark:border-zinc-700 bg-transparent text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-zinc-500" />
+      </label>
+    </div>
+
+    <!-- Countdown & State Display -->
+    <div class="flex flex-col items-center justify-center p-8 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/40 relative overflow-hidden shadow-sm">
+      <div id="progressBar" class="absolute bottom-0 left-0 h-1 bg-emerald-500 transition-all duration-300 w-0"></div>
+      <div class="flex items-center gap-2 mb-2">
+        <span id="phaseBadge" class="text-xs font-semibold px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+          Focus
+        </span>
+        <span id="cycleTracker" class="text-xs text-zinc-500 font-mono">Cycle 1 / 3</span>
+      </div>
+      <div id="timerDisplay" class="text-7xl sm:text-8xl font-bold font-mono tracking-tighter my-2 tabular-nums">
+        90:00
+      </div>
+
+      <!-- Playback Controls -->
+      <div class="flex items-center gap-3 mt-4">
+        <button id="startPauseBtn" class="px-6 py-2.5 rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 font-medium text-sm hover:opacity-90 transition">
+          Start Focus
+        </button>
+        <button id="skipBtn" class="px-4 py-2.5 rounded-xl border border-zinc-300 dark:border-zinc-700 text-sm hover:bg-zinc-200 dark:hover:bg-zinc-800 transition">
+          Skip
+        </button>
+        <button id="resetBtn" class="px-4 py-2.5 rounded-xl border border-zinc-300 dark:border-zinc-700 text-sm hover:bg-zinc-200 dark:hover:bg-zinc-800 transition">
+          Reset
+        </button>
+      </div>
+    </div>
+
+    <!-- Sound Control Section -->
+    <div class="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 space-y-3 shadow-sm">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Audio Integration</span>
+        <div class="flex items-center gap-2">
+          <input type="checkbox" id="autoPlayAudio" checked class="rounded border-zinc-300 text-zinc-900 focus:ring-0" />
+          <label for="autoPlayAudio" class="text-xs text-zinc-600 dark:text-zinc-400">Play during focus only</label>
+        </div>
+      </div>
+
+      <div class="flex gap-2 text-xs">
+        <button id="sourceLocalBtn" class="flex-1 py-1.5 px-3 rounded-lg border border-zinc-400 dark:border-zinc-600 bg-zinc-200 dark:bg-zinc-800 font-medium">
+          Local File (/audio/brown-noise.mp3)
+        </button>
+        <button id="sourceYtBtn" class="flex-1 py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200">
+          YouTube Stream
+        </button>
+      </div>
+
+      <!-- YouTube URL Input Container -->
+      <div id="ytInputContainer" class="hidden space-y-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+        <input id="ytUrlInput" type="url" placeholder="https://www.youtube.com/watch?v=..." class="w-full p-2 text-xs rounded border border-zinc-200 dark:border-zinc-700 bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-zinc-500" />
+        <p class="text-[10px] text-zinc-400">Pastes standard or short links. Audio plays through headless embedded player.</p>
+      </div>
+
+      <!-- Volume -->
+      <div class="flex items-center gap-3 pt-1">
+        <span class="text-xs text-zinc-500">Volume</span>
+        <input id="volumeSlider" type="range" min="0" max="1" step="0.05" value="0.8" class="w-full accent-zinc-900 dark:accent-zinc-100" />
+      </div>
+    </div>
+  </main>
+
+  <footer class="text-center text-[11px] text-zinc-400 mt-6">
+    Frontend SPA • Runs entirely in-browser • Supports Safari Dock Mode
+  </footer>
+
+  <!-- Hidden Audio Interfaces -->
+  <audio id="localAudioPlayer" loop src="/audio/brown-noise.mp3"></audio>
+  <div id="ytPlayerContainer" class="hidden"></div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
+
