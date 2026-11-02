@@ -7,6 +7,23 @@ declare global {
   }
 }
 
+// Helper to open URLs in default browser across both Tauri desktop and Web
+async function openExternalUrl(url: string, e?: Event): Promise<void> {
+  if (e) {
+    e.preventDefault();
+  }
+  try {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      await openUrl(url);
+      return;
+    }
+  } catch (err) {
+    console.warn('Tauri opener unavailable, falling back to window.open:', err);
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 type TimerPhase = 'work' | 'break';
 
 interface ProtocolConfig {
@@ -167,6 +184,11 @@ class FocusApp {
   private ytPlayer: any = null;
   private isYtReady: boolean = false;
 
+  // DOM Elements - Navigation & Header
+  private ghRepoLink = document.getElementById('ghRepoLink') as HTMLAnchorElement | null;
+  private themeToggleBtn = document.getElementById('themeToggleBtn') as HTMLButtonElement;
+  private themeIcon = document.getElementById('themeIcon') as HTMLSpanElement;
+
   // DOM Elements - Timer
   private timerDisplay = document.getElementById('timerDisplay') as HTMLDivElement;
   private phaseBadge = document.getElementById('phaseBadge') as HTMLSpanElement;
@@ -179,9 +201,6 @@ class FocusApp {
   private workInput = document.getElementById('workDurationInput') as HTMLInputElement;
   private breakInput = document.getElementById('breakDurationInput') as HTMLInputElement;
   private cyclesInput = document.getElementById('cyclesInput') as HTMLInputElement;
-
-  private themeToggleBtn = document.getElementById('themeToggleBtn') as HTMLButtonElement;
-  private themeIcon = document.getElementById('themeIcon') as HTMLSpanElement;
 
   // Audio Controls
   private localAudio = document.getElementById('localAudioPlayer') as HTMLAudioElement;
@@ -259,6 +278,21 @@ class FocusApp {
   }
 
   private initEventListeners(): void {
+    // External Link Routing
+    if (this.ghRepoLink) {
+      this.ghRepoLink.addEventListener('click', (e) => {
+        openExternalUrl('https://github.com/maverickreal/UberMensch/', e);
+      });
+    }
+
+    if (this.ytExternalLink) {
+      this.ytExternalLink.addEventListener('click', (e) => {
+        if (this.activeYtStream) {
+          openExternalUrl(this.activeYtStream.url, e);
+        }
+      });
+    }
+
     this.themeToggleBtn.addEventListener('click', () => this.toggleTheme());
     this.startPauseBtn.addEventListener('click', () => this.toggleTimer());
     this.resetBtn.addEventListener('click', () => this.resetTimer());
@@ -920,7 +954,6 @@ class FocusApp {
             this.isYtReady = true;
             this.handleVolumeChange();
             
-            // Visual Update: switch dot to green & hide banner
             this.ytTabDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500';
             this.ytTabDot.title = 'YouTube API Connected';
             this.ytApiBanner.classList.add('hidden');
