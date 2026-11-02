@@ -1,18 +1,16 @@
-
-/** @type {import(tailwindcss).Config} */
+/** @type {import('tailwindcss').Config} */
 export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
-  darkMode: class,
+  darkMode: 'class',
   theme: {
     extend: {
       fontFamily: {
-        mono: [SF Mono, Menlo, Monaco, Courier New, monospace]
+        mono: ['SF Mono', 'Menlo', 'Monaco', 'Courier New', 'monospace']
       }
     },
   },
   plugins: [],
 }
-
