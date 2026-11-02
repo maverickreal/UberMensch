@@ -10,12 +10,29 @@
   <!-- Header / Controls Bar -->
   <header class="flex justify-between items-center max-w-xl w-full mx-auto">
     <div class="flex items-center gap-2">
-      <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+      <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
       <h1 class="text-sm font-bold tracking-wider uppercase text-zinc-800 dark:text-zinc-200">UberMensch</h1>
     </div>
-    <button id="themeToggleBtn" class="p-2 rounded-lg border border-zinc-300 dark:border-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-900 transition-colors">
-      <span id="themeIcon" class="text-sm">☀️</span>
-    </button>
+    
+    <div class="flex items-center gap-2">
+      <!-- GitHub Repo Link -->
+      <a 
+        href="https://github.com/maverickreal/UberMensch/" 
+        target="_blank" 
+        rel="noreferrer" 
+        title="View source on GitHub"
+        class="p-2 rounded-lg border border-zinc-300 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-900 transition-colors flex items-center justify-center"
+      >
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+        </svg>
+      </a>
+
+      <!-- Theme Switcher -->
+      <button id="themeToggleBtn" class="p-2 rounded-lg border border-zinc-300 dark:border-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-900 transition-colors">
+        <span id="themeIcon" class="text-sm">☀️</span>
+      </button>
+    </div>
   </header>
 
   <!-- Main Timer Module -->
@@ -92,8 +109,9 @@
         <button id="sourceLocalBtn" class="flex-1 py-1.5 px-3 rounded-lg border border-zinc-400 dark:border-zinc-600 bg-zinc-200 dark:bg-zinc-800 font-medium transition-colors">
           Imported Tracks
         </button>
-        <button id="sourceYtBtn" class="flex-1 py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors">
-          YouTube Stream
+        <button id="sourceYtBtn" class="flex-1 py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors flex items-center justify-center gap-1.5">
+          <span>YouTube Stream</span>
+          <span id="ytTabDot" class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" title="Connecting to YouTube API..."></span>
         </button>
       </div>
 
@@ -101,37 +119,55 @@
       <div id="localAudioContainer" class="space-y-3">
         <div class="flex items-center gap-2">
           <select id="audioTrackSelect" class="flex-1 p-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-zinc-500 truncate">
-            <option value="" disabled selected>No audio files imported</option>
+            <option value="" disabled selected>⏳ Loading saved tracks...</option>
           </select>
 
-          <button id="deleteTrackBtn" title="Delete selected track" class="p-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-rose-500/10 hover:border-rose-500 text-zinc-400 hover:text-rose-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          <button id="deleteTrackBtn" title="Delete selected track" disabled class="p-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-rose-500/10 hover:border-rose-500 text-zinc-400 hover:text-rose-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
             ✕
           </button>
 
-          <label for="audioFileInput" class="cursor-pointer py-2 px-3 text-xs font-medium rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 transition whitespace-nowrap">
-            + Import File
+          <!-- Import File Picker Button with Spinner Support -->
+          <label id="importBtnLabel" for="audioFileInput" class="cursor-pointer py-2 px-3 text-xs font-medium rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 transition whitespace-nowrap flex items-center gap-1.5">
+            <svg id="importSpinner" class="hidden animate-spin h-3.5 w-3.5 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span id="importBtnText">+ Import File</span>
           </label>
           <input id="audioFileInput" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" class="hidden" />
         </div>
-        <p id="audioFileMeta" class="text-[10px] text-zinc-400">Upload audio files (.mp3, .wav, .m4a, etc.). Stored permanently in your browser.</p>
+        <p id="audioFileMeta" class="text-[10px] text-zinc-400">Loading library from local storage...</p>
       </div>
 
       <!-- YouTube Stream Panel -->
       <div id="ytInputContainer" class="hidden space-y-3">
+        <!-- API Connection Notice Bar -->
+        <div id="ytApiBanner" class="p-2 px-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[11px] flex items-center justify-between">
+          <span class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+            Connecting to YouTube IFrame API...
+          </span>
+          <span class="text-[10px] text-zinc-400">Takes 1-2s on startup</span>
+        </div>
+
         <!-- Add URL Form -->
         <div class="flex items-center gap-2">
           <input id="ytUrlInput" type="url" placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...)" class="flex-1 p-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-zinc-500" />
-          <button id="addYtBtn" class="py-2 px-3 text-xs font-medium rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 transition whitespace-nowrap">
-            + Save Stream
+          <button id="addYtBtn" class="py-2 px-3 text-xs font-medium rounded-lg bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 transition whitespace-nowrap flex items-center gap-1.5">
+            <svg id="ytSaveSpinner" class="hidden animate-spin h-3.5 w-3.5 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span id="addYtBtnText">+ Save Stream</span>
           </button>
         </div>
 
         <!-- Saved Streams Select + Delete -->
         <div class="flex items-center gap-2">
           <select id="ytStreamSelect" class="flex-1 p-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-zinc-500 truncate">
-            <option value="" disabled selected>No saved YouTube streams</option>
+            <option value="" disabled selected>⏳ Loading saved streams...</option>
           </select>
-          <button id="deleteYtBtn" title="Delete selected stream" class="p-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-rose-500/10 hover:border-rose-500 text-zinc-400 hover:text-rose-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          <button id="deleteYtBtn" title="Delete selected stream" disabled class="p-2 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-rose-500/10 hover:border-rose-500 text-zinc-400 hover:text-rose-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
             ✕
           </button>
         </div>
@@ -150,6 +186,37 @@
         </div>
 
         <p id="ytStatusMeta" class="text-[10px] text-zinc-400">Pasted streams are saved locally with metadata for quick switching.</p>
+      </div>
+
+      <!-- Media Controls Toolbar -->
+      <div class="flex items-center justify-between p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-800/40">
+        <div class="flex items-center gap-1.5">
+          <!-- Previous Track -->
+          <button id="mediaPrevBtn" title="Previous Track" class="p-2 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+            <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+          </button>
+          
+          <!-- Play / Pause -->
+          <button id="mediaPlayPauseBtn" title="Play / Pause" class="p-2 px-3 rounded-md bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 hover:opacity-90 transition-all flex items-center justify-center">
+            <svg id="mediaPlayIcon" class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <svg id="mediaPauseIcon" class="w-4 h-4 fill-current hidden" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          </button>
+          
+          <!-- Stop -->
+          <button id="mediaStopBtn" title="Stop Audio" class="p-2 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors">
+            <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+          </button>
+          
+          <!-- Next Track -->
+          <button id="mediaNextBtn" title="Next Track" class="p-2 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+            <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          </button>
+        </div>
+
+        <!-- Live Status Label -->
+        <span id="mediaPlayingStatus" class="text-[11px] font-mono text-zinc-400 dark:text-zinc-500 truncate max-w-[160px] sm:max-w-[220px]">
+          Initializing library...
+        </span>
       </div>
 
       <!-- Volume -->

@@ -18,7 +18,9 @@ interface ProtocolConfig {
 interface StoredTrack {
   id: string;
   name: string;
-  blob: Blob;
+  buffer?: ArrayBuffer;
+  blob?: Blob;
+  type?: string;
   createdAt: number;
 }
 
@@ -32,10 +34,10 @@ interface YouTubeStream {
   createdAt: number;
 }
 
-// Unified IndexedDB Layer for Audio Files & YouTube Streams
+// Unified IndexedDB Layer
 class AppStorage {
   private dbName = 'UberMenschAudioDB';
-  private dbVersion = 2; // Upgraded for youtube_streams store
+  private dbVersion = 3;
   private db: IDBDatabase | null = null;
 
   public async init(): Promise<void> {
@@ -61,12 +63,13 @@ class AppStorage {
     });
   }
 
-  // --- Track Methods ---
   public async saveTrack(file: File): Promise<StoredTrack> {
+    const buffer = await file.arrayBuffer();
     const track: StoredTrack = {
       id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
       name: file.name,
-      blob: file,
+      buffer,
+      type: file.type || 'audio/mpeg',
       createdAt: Date.now(),
     };
 
@@ -102,7 +105,6 @@ class AppStorage {
     });
   }
 
-  // --- YouTube Stream Methods ---
   public async saveYouTubeStream(stream: YouTubeStream): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.db) return reject('Database not initialized');
@@ -150,21 +152,22 @@ class FocusApp {
   private totalPhaseSeconds: number = 90 * 60;
   private timerInterval: number | null = null;
   private isRunning: boolean = false;
+  
+  private phaseEndTime: number | null = null;
 
   private audioMode: 'local' | 'youtube' = 'local';
+  private isMediaPlaying: boolean = false;
   private appStorage = new AppStorage();
   
-  // Local Tracks State
   private tracks: StoredTrack[] = [];
   private activeTrackUrl: string | null = null;
 
-  // YouTube State
   private ytStreams: YouTubeStream[] = [];
   private activeYtStream: YouTubeStream | null = null;
   private ytPlayer: any = null;
   private isYtReady: boolean = false;
 
-  // DOM Elements
+  // DOM Elements - Timer
   private timerDisplay = document.getElementById('timerDisplay') as HTMLDivElement;
   private phaseBadge = document.getElementById('phaseBadge') as HTMLSpanElement;
   private cycleTracker = document.getElementById('cycleTracker') as HTMLSpanElement;
@@ -180,23 +183,31 @@ class FocusApp {
   private themeToggleBtn = document.getElementById('themeToggleBtn') as HTMLButtonElement;
   private themeIcon = document.getElementById('themeIcon') as HTMLSpanElement;
 
+  // Audio Controls
   private localAudio = document.getElementById('localAudioPlayer') as HTMLAudioElement;
   private autoPlayCheck = document.getElementById('autoPlayAudio') as HTMLInputElement;
   private volumeSlider = document.getElementById('volumeSlider') as HTMLInputElement;
   private sourceLocalBtn = document.getElementById('sourceLocalBtn') as HTMLButtonElement;
   private sourceYtBtn = document.getElementById('sourceYtBtn') as HTMLButtonElement;
+  private ytTabDot = document.getElementById('ytTabDot') as HTMLSpanElement;
   private localAudioContainer = document.getElementById('localAudioContainer') as HTMLDivElement;
   private ytInputContainer = document.getElementById('ytInputContainer') as HTMLDivElement;
+  private ytApiBanner = document.getElementById('ytApiBanner') as HTMLDivElement;
 
   // Local Tracks UI
   private audioTrackSelect = document.getElementById('audioTrackSelect') as HTMLSelectElement;
   private audioFileInput = document.getElementById('audioFileInput') as HTMLInputElement;
   private deleteTrackBtn = document.getElementById('deleteTrackBtn') as HTMLButtonElement;
   private audioFileMeta = document.getElementById('audioFileMeta') as HTMLParagraphElement;
+  private importBtnLabel = document.getElementById('importBtnLabel') as HTMLLabelElement;
+  private importSpinner = document.getElementById('importSpinner') as unknown as SVGElement;
+  private importBtnText = document.getElementById('importBtnText') as HTMLSpanElement;
 
   // YouTube UI
   private ytUrlInput = document.getElementById('ytUrlInput') as HTMLInputElement;
   private addYtBtn = document.getElementById('addYtBtn') as HTMLButtonElement;
+  private ytSaveSpinner = document.getElementById('ytSaveSpinner') as unknown as SVGElement;
+  private addYtBtnText = document.getElementById('addYtBtnText') as HTMLSpanElement;
   private ytStreamSelect = document.getElementById('ytStreamSelect') as HTMLSelectElement;
   private deleteYtBtn = document.getElementById('deleteYtBtn') as HTMLButtonElement;
   private ytInfoCard = document.getElementById('ytInfoCard') as HTMLDivElement;
@@ -205,7 +216,15 @@ class FocusApp {
   private ytAuthor = document.getElementById('ytAuthor') as HTMLParagraphElement;
   private ytIdTag = document.getElementById('ytIdTag') as HTMLSpanElement;
   private ytExternalLink = document.getElementById('ytExternalLink') as HTMLAnchorElement;
-  private ytStatusMeta = document.getElementById('ytStatusMeta') as HTMLParagraphElement;
+
+  // Media Toolbar Elements
+  private mediaPrevBtn = document.getElementById('mediaPrevBtn') as HTMLButtonElement;
+  private mediaNextBtn = document.getElementById('mediaNextBtn') as HTMLButtonElement;
+  private mediaPlayPauseBtn = document.getElementById('mediaPlayPauseBtn') as HTMLButtonElement;
+  private mediaStopBtn = document.getElementById('mediaStopBtn') as HTMLButtonElement;
+  private mediaPlayIcon = document.getElementById('mediaPlayIcon') as unknown as SVGElement;
+  private mediaPauseIcon = document.getElementById('mediaPauseIcon') as unknown as SVGElement;
+  private mediaPlayingStatus = document.getElementById('mediaPlayingStatus') as HTMLSpanElement;
 
   constructor() {
     this.initTheme();
@@ -245,7 +264,19 @@ class FocusApp {
     this.resetBtn.addEventListener('click', () => this.resetTimer());
     this.skipBtn.addEventListener('click', () => this.skipPhase());
 
-    // Presets
+    window.addEventListener('beforeunload', (e) => {
+      if (this.isRunning) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && this.isRunning && this.phaseEndTime) {
+        this.tick();
+      }
+    });
+
     document.querySelectorAll('.preset-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLElement;
@@ -268,41 +299,54 @@ class FocusApp {
     this.breakInput.addEventListener('change', onConfigChange);
     this.cyclesInput.addEventListener('change', onConfigChange);
 
-    // Audio source switches
     this.sourceLocalBtn.addEventListener('click', () => this.switchAudioSource('local'));
     this.sourceYtBtn.addEventListener('click', () => this.switchAudioSource('youtube'));
     this.volumeSlider.addEventListener('input', () => this.handleVolumeChange());
 
-    // Local Tracks
     this.audioFileInput.addEventListener('change', (e) => this.handleFileImport(e));
     this.audioTrackSelect.addEventListener('change', () => this.handleTrackSelect());
     this.deleteTrackBtn.addEventListener('click', () => this.handleDeleteTrack());
 
-    // YouTube Streams
+    this.localAudio.addEventListener('play', () => {
+      if (this.audioMode === 'local') {
+        this.isMediaPlaying = true;
+        this.updateMediaControlsUI();
+      }
+    });
+    this.localAudio.addEventListener('pause', () => {
+      if (this.audioMode === 'local') {
+        this.isMediaPlaying = false;
+        this.updateMediaControlsUI();
+      }
+    });
+
     this.addYtBtn.addEventListener('click', () => this.handleSaveYouTubeStream());
     this.ytUrlInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.handleSaveYouTubeStream();
     });
     this.ytStreamSelect.addEventListener('change', () => this.handleYouTubeSelect());
     this.deleteYtBtn.addEventListener('click', () => this.handleDeleteYouTubeStream());
+
+    this.mediaPlayPauseBtn.addEventListener('click', () => this.handleMediaPlayPause());
+    this.mediaStopBtn.addEventListener('click', () => this.handleMediaStop());
+    this.mediaPrevBtn.addEventListener('click', () => this.handleMediaPrev());
+    this.mediaNextBtn.addEventListener('click', () => this.handleMediaNext());
   }
 
-  // --- INITIALIZATION ---
+  // --- ASYNC STORAGE INITIALIZATION & SKELETON RESOLUTION ---
 
   private async initStorageAndMedia(): Promise<void> {
     try {
       await this.appStorage.init();
       
-      // Load Local Audio Tracks
       this.tracks = await this.appStorage.getAllTracks();
       this.renderTrackOptions();
       const lastSelectedTrackId = localStorage.getItem('selectedTrackId');
       if (lastSelectedTrackId && this.tracks.some(t => t.id === lastSelectedTrackId)) {
         this.audioTrackSelect.value = lastSelectedTrackId;
       }
-      this.handleTrackSelect();
+      await this.handleTrackSelect();
 
-      // Load YouTube Streams
       this.ytStreams = await this.appStorage.getAllYouTubeStreams();
       this.renderYouTubeOptions();
       const lastSelectedYtId = localStorage.getItem('selectedYtStreamId');
@@ -310,8 +354,11 @@ class FocusApp {
         this.ytStreamSelect.value = lastSelectedYtId;
       }
       this.handleYouTubeSelect();
+
+      this.updateMediaControlsUI();
     } catch (err) {
-      console.error('Failed to initialize storage and media:', err);
+      console.error('Failed to initialize storage:', err);
+      this.mediaPlayingStatus.innerText = 'Storage init error';
     }
   }
 
@@ -346,20 +393,31 @@ class FocusApp {
     if (!target.files || target.files.length === 0) return;
 
     const file = target.files[0];
+    
+    // UI Visual feedback: show spinner and disable interactions
+    this.importSpinner.classList.remove('hidden');
+    this.importBtnText.innerText = 'Reading audio...';
+    this.importBtnLabel.classList.add('opacity-70', 'pointer-events-none');
+    this.audioFileMeta.innerText = `Importing ${file.name} to persistent storage...`;
+
     try {
       const savedTrack = await this.appStorage.saveTrack(file);
       this.tracks.push(savedTrack);
       this.renderTrackOptions();
       this.audioTrackSelect.value = savedTrack.id;
-      this.handleTrackSelect();
+      await this.handleTrackSelect();
     } catch (err) {
       console.error('Failed to save audio file:', err);
+      this.audioFileMeta.innerText = 'Failed to import audio file.';
     } finally {
+      this.importSpinner.classList.add('hidden');
+      this.importBtnText.innerText = '+ Import File';
+      this.importBtnLabel.classList.remove('opacity-70', 'pointer-events-none');
       target.value = '';
     }
   }
 
-  private handleTrackSelect(): void {
+  private async handleTrackSelect(): Promise<void> {
     const selectedId = this.audioTrackSelect.value;
     const track = this.tracks.find(t => t.id === selectedId);
 
@@ -370,13 +428,31 @@ class FocusApp {
 
     if (track) {
       localStorage.setItem('selectedTrackId', track.id);
-      this.activeTrackUrl = URL.createObjectURL(track.blob);
+      
+      let blob: Blob;
+      if (track.buffer) {
+        blob = new Blob([track.buffer], { type: track.type || 'audio/mpeg' });
+      } else if (track.blob) {
+        const buf = await track.blob.arrayBuffer();
+        blob = new Blob([buf], { type: track.type || 'audio/mpeg' });
+      } else {
+        return;
+      }
+
+      this.activeTrackUrl = URL.createObjectURL(blob);
       this.localAudio.src = this.activeTrackUrl;
-      const sizeMb = (track.blob.size / (1024 * 1024)).toFixed(2);
-      this.audioFileMeta.innerText = `Active: ${track.name} (${sizeMb} MB) • Loop enabled`;
+      this.localAudio.load();
+
+      const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
+      this.audioFileMeta.innerText = `Active: ${track.name} (${sizeMb} MB) • Ready`;
+
+      if (this.isMediaPlaying && this.audioMode === 'local') {
+        this.playAudio();
+      }
     } else {
       this.localAudio.removeAttribute('src');
     }
+    this.updateMediaControlsUI();
   }
 
   private async handleDeleteTrack(): Promise<void> {
@@ -390,7 +466,7 @@ class FocusApp {
       if (this.tracks.length > 0) {
         this.audioTrackSelect.value = this.tracks[0].id;
       }
-      this.handleTrackSelect();
+      await this.handleTrackSelect();
     } catch (err) {
       console.error('Failed to delete track:', err);
     }
@@ -428,12 +504,13 @@ class FocusApp {
 
     const videoId = this.extractYouTubeID(rawUrl);
     if (!videoId) {
-      alert('Please provide a valid YouTube URL (e.g., https://www.youtube.com/watch?v=... or https://youtu.be/...)');
+      alert('Please provide a valid YouTube URL');
       return;
     }
 
     this.addYtBtn.disabled = true;
-    this.addYtBtn.innerText = 'Saving...';
+    this.ytSaveSpinner.classList.remove('hidden');
+    this.addYtBtnText.innerText = 'Fetching info...';
 
     const metadata = await this.fetchYouTubeMetadata(videoId);
     const newStream: YouTubeStream = {
@@ -464,7 +541,8 @@ class FocusApp {
       console.error('Failed to save YouTube stream:', err);
     } finally {
       this.addYtBtn.disabled = false;
-      this.addYtBtn.innerText = '+ Save Stream';
+      this.ytSaveSpinner.classList.add('hidden');
+      this.addYtBtnText.innerText = '+ Save Stream';
     }
   }
 
@@ -500,7 +578,6 @@ class FocusApp {
       this.activeYtStream = stream;
       localStorage.setItem('selectedYtStreamId', stream.id);
 
-      // Populate Info Card
       this.ytThumb.src = stream.thumbnailUrl;
       this.ytTitle.innerText = stream.title;
       this.ytAuthor.innerText = stream.author;
@@ -508,14 +585,17 @@ class FocusApp {
       this.ytExternalLink.href = stream.url;
       this.ytInfoCard.classList.remove('hidden');
 
-      // Cue inside headless YouTube player
       if (this.ytPlayer && this.isYtReady) {
         this.ytPlayer.cueVideoById(stream.videoId);
+        if (this.isMediaPlaying && this.audioMode === 'youtube') {
+          this.ytPlayer.playVideo();
+        }
       }
     } else {
       this.activeYtStream = null;
       this.ytInfoCard.classList.add('hidden');
     }
+    this.updateMediaControlsUI();
   }
 
   private async handleDeleteYouTubeStream(): Promise<void> {
@@ -532,6 +612,83 @@ class FocusApp {
       this.handleYouTubeSelect();
     } catch (err) {
       console.error('Failed to delete YouTube stream:', err);
+    }
+  }
+
+  // --- MEDIA TOOLBAR CONTROLS ---
+
+  private updateMediaControlsUI(): void {
+    if (this.isMediaPlaying) {
+      this.mediaPlayIcon.classList.add('hidden');
+      this.mediaPauseIcon.classList.remove('hidden');
+    } else {
+      this.mediaPlayIcon.classList.remove('hidden');
+      this.mediaPauseIcon.classList.add('hidden');
+    }
+
+    const count = this.audioMode === 'local' ? this.tracks.length : this.ytStreams.length;
+    this.mediaPrevBtn.disabled = count <= 1;
+    this.mediaNextBtn.disabled = count <= 1;
+
+    if (this.isMediaPlaying) {
+      const activeName = this.audioMode === 'local' 
+        ? (this.tracks.find(t => t.id === this.audioTrackSelect.value)?.name || 'Local File')
+        : (this.activeYtStream?.title || 'YouTube Stream');
+      this.mediaPlayingStatus.innerText = `Playing: ${activeName}`;
+      this.mediaPlayingStatus.className = 'text-[11px] font-mono text-emerald-500 dark:text-emerald-400 truncate max-w-[160px] sm:max-w-[220px] font-semibold';
+    } else {
+      this.mediaPlayingStatus.innerText = 'Audio Paused / Idle';
+      this.mediaPlayingStatus.className = 'text-[11px] font-mono text-zinc-400 dark:text-zinc-500 truncate max-w-[160px] sm:max-w-[220px]';
+    }
+  }
+
+  private handleMediaPlayPause(): void {
+    if (this.isMediaPlaying) {
+      this.pauseAudio();
+    } else {
+      this.playAudio();
+    }
+  }
+
+  private handleMediaStop(): void {
+    this.pauseAudio();
+    if (this.audioMode === 'local') {
+      this.localAudio.currentTime = 0;
+    } else if (this.audioMode === 'youtube' && this.ytPlayer && this.isYtReady) {
+      this.ytPlayer.seekTo(0, true);
+    }
+    this.mediaPlayingStatus.innerText = 'Audio Stopped';
+  }
+
+  private handleMediaNext(): void {
+    if (this.audioMode === 'local') {
+      if (this.tracks.length <= 1) return;
+      const currentIndex = this.tracks.findIndex(t => t.id === this.audioTrackSelect.value);
+      const nextIndex = (currentIndex + 1) % this.tracks.length;
+      this.audioTrackSelect.value = this.tracks[nextIndex].id;
+      this.handleTrackSelect();
+    } else {
+      if (this.ytStreams.length <= 1) return;
+      const currentIndex = this.ytStreams.findIndex(s => s.id === this.ytStreamSelect.value);
+      const nextIndex = (currentIndex + 1) % this.ytStreams.length;
+      this.ytStreamSelect.value = this.ytStreams[nextIndex].id;
+      this.handleYouTubeSelect();
+    }
+  }
+
+  private handleMediaPrev(): void {
+    if (this.audioMode === 'local') {
+      if (this.tracks.length <= 1) return;
+      const currentIndex = this.tracks.findIndex(t => t.id === this.audioTrackSelect.value);
+      const prevIndex = (currentIndex - 1 + this.tracks.length) % this.tracks.length;
+      this.audioTrackSelect.value = this.tracks[prevIndex].id;
+      this.handleTrackSelect();
+    } else {
+      if (this.ytStreams.length <= 1) return;
+      const currentIndex = this.ytStreams.findIndex(s => s.id === this.ytStreamSelect.value);
+      const prevIndex = (currentIndex - 1 + this.ytStreams.length) % this.ytStreams.length;
+      this.ytStreamSelect.value = this.ytStreams[prevIndex].id;
+      this.handleYouTubeSelect();
     }
   }
 
@@ -567,6 +724,8 @@ class FocusApp {
 
   private startTimer(): void {
     this.isRunning = true;
+    this.phaseEndTime = Date.now() + this.secondsRemaining * 1000;
+
     this.startPauseBtn.innerText = 'Pause';
     this.startPauseBtn.classList.replace('bg-zinc-900', 'bg-amber-600');
     this.startPauseBtn.classList.replace('dark:bg-zinc-100', 'dark:bg-amber-500');
@@ -575,17 +734,31 @@ class FocusApp {
       this.playAudio();
     }
 
-    this.timerInterval = window.setInterval(() => {
-      if (this.secondsRemaining > 0) {
-        this.secondsRemaining--;
-        this.updateDisplay();
-      } else {
-        this.handlePhaseTransition();
-      }
-    }, 1000);
+    if (this.timerInterval) clearInterval(this.timerInterval);
+    this.timerInterval = window.setInterval(() => this.tick(), 250);
+  }
+
+  private tick(): void {
+    if (!this.phaseEndTime) return;
+    const remainingMs = this.phaseEndTime - Date.now();
+    const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
+
+    if (remainingSec > 0) {
+      this.secondsRemaining = remainingSec;
+      this.updateDisplay();
+    } else {
+      this.secondsRemaining = 0;
+      this.updateDisplay();
+      this.handlePhaseTransition();
+    }
   }
 
   private pauseTimer(): void {
+    if (this.phaseEndTime) {
+      this.secondsRemaining = Math.max(0, Math.ceil((this.phaseEndTime - Date.now()) / 1000));
+      this.phaseEndTime = null;
+    }
+
     this.isRunning = false;
     this.startPauseBtn.innerText = 'Resume';
     this.startPauseBtn.classList.replace('bg-amber-600', 'bg-zinc-900');
@@ -597,6 +770,7 @@ class FocusApp {
 
   private resetTimer(): void {
     this.pauseTimer();
+    this.phaseEndTime = null;
     this.currentPhase = 'work';
     this.currentCycle = 1;
     this.startPauseBtn.innerText = 'Start Focus';
@@ -646,22 +820,29 @@ class FocusApp {
     }
   }
 
-  // --- AUDIO CONTROLLER ---
+  // --- AUDIO CONTROLLER ENGINE ---
 
   private switchAudioSource(mode: 'local' | 'youtube'): void {
+    const wasPlaying = this.isMediaPlaying;
     this.pauseAudio();
     this.audioMode = mode;
 
     if (mode === 'local') {
       this.sourceLocalBtn.className = 'flex-1 py-1.5 px-3 rounded-lg border border-zinc-400 dark:border-zinc-600 bg-zinc-200 dark:bg-zinc-800 font-medium transition-colors';
-      this.sourceYtBtn.className = 'flex-1 py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors';
+      this.sourceYtBtn.className = 'flex-1 py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors flex items-center justify-center gap-1.5';
       this.localAudioContainer.classList.remove('hidden');
       this.ytInputContainer.classList.add('hidden');
     } else {
-      this.sourceYtBtn.className = 'flex-1 py-1.5 px-3 rounded-lg border border-zinc-400 dark:border-zinc-600 bg-zinc-200 dark:bg-zinc-800 font-medium transition-colors';
+      this.sourceYtBtn.className = 'flex-1 py-1.5 px-3 rounded-lg border border-zinc-400 dark:border-zinc-600 bg-zinc-200 dark:bg-zinc-800 font-medium transition-colors flex items-center justify-center gap-1.5';
       this.sourceLocalBtn.className = 'flex-1 py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors';
       this.localAudioContainer.classList.add('hidden');
       this.ytInputContainer.classList.remove('hidden');
+    }
+
+    if (wasPlaying || (this.isRunning && this.currentPhase === 'work' && this.autoPlayCheck.checked)) {
+      this.playAudio();
+    } else {
+      this.updateMediaControlsUI();
     }
   }
 
@@ -674,20 +855,49 @@ class FocusApp {
   }
 
   private playAudio(): void {
-    if (this.audioMode === 'local' && this.localAudio.src) {
-      this.localAudio.play().catch(() => {
-        console.warn('Waiting on user gesture for audio playback');
-      });
-    } else if (this.audioMode === 'youtube' && this.ytPlayer && this.isYtReady && this.activeYtStream) {
-      this.ytPlayer.playVideo();
+    if (this.audioMode === 'local') {
+      if (!this.localAudio.src || this.tracks.length === 0) {
+        this.mediaPlayingStatus.innerText = 'No file imported';
+        return;
+      }
+
+      this.localAudio.play()
+        .then(() => {
+          this.isMediaPlaying = true;
+          this.updateMediaControlsUI();
+        })
+        .catch((err) => {
+          console.error('Audio play error:', err);
+          if (err.name === 'NotAllowedError') {
+            this.mediaPlayingStatus.innerText = 'Safari blocked autoplay';
+          } else {
+            this.mediaPlayingStatus.innerText = 'Format unsupported';
+          }
+          this.isMediaPlaying = false;
+          this.updateMediaControlsUI();
+        });
+    } else if (this.audioMode === 'youtube') {
+      if (!this.isYtReady) {
+        this.mediaPlayingStatus.innerText = 'Waiting on YouTube API...';
+        return;
+      }
+      if (this.ytPlayer && this.activeYtStream) {
+        this.ytPlayer.playVideo();
+        this.isMediaPlaying = true;
+        this.updateMediaControlsUI();
+      }
     }
   }
 
   private pauseAudio(): void {
-    this.localAudio.pause();
+    if (this.audioMode === 'local') {
+      this.localAudio.pause();
+    }
     if (this.ytPlayer && this.isYtReady) {
       this.ytPlayer.pauseVideo();
     }
+    this.isMediaPlaying = false;
+    this.updateMediaControlsUI();
   }
 
   private initYouTubeAPI(): void {
@@ -709,8 +919,24 @@ class FocusApp {
           onReady: () => {
             this.isYtReady = true;
             this.handleVolumeChange();
+            
+            // Visual Update: switch dot to green & hide banner
+            this.ytTabDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500';
+            this.ytTabDot.title = 'YouTube API Connected';
+            this.ytApiBanner.classList.add('hidden');
+
             if (this.activeYtStream) {
               this.ytPlayer.cueVideoById(this.activeYtStream.videoId);
+            }
+          },
+          onStateChange: (event: any) => {
+            if (this.audioMode === 'youtube') {
+              if (event.data === 1) {
+                this.isMediaPlaying = true;
+              } else if (event.data === 2 || event.data === 0) {
+                this.isMediaPlaying = false;
+              }
+              this.updateMediaControlsUI();
             }
           },
         },
