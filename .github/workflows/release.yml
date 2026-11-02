@@ -23,6 +23,27 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Sync version from Git Tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "Syncing release version to $VERSION"
+          bun -e "
+            const fs = require('fs');
+            
+            // 1. Update src-tauri/tauri.conf.json
+            const tauriPath = 'src-tauri/tauri.conf.json';
+            const tauriConf = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
+            tauriConf.version = '$VERSION';
+            fs.writeFileSync(tauriPath, JSON.stringify(tauriConf, null, 2));
+
+            // 2. Update package.json
+            const pkgPath = 'package.json';
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            pkg.version = '$VERSION';
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+          "
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
