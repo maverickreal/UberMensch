@@ -1,123 +1,109 @@
 # ⏱️ UberMensch
 
-A protocol-agnostic, distraction-free desktop focus engine and ambient audio companion.
+A configurable desktop focus timer with a local audio library and saved YouTube streams.
 
 ## Overview
 
-**UberMensch** is a lightweight, zero-subscription desktop focus application designed for deep work. Rather than enforcing a rigid methodology, it provides a protocol-agnostic timing engine coupled with integrated ambient audio options (offline local audio imports and persistent YouTube streaming).
+UberMensch is a lightweight focus timer built with TypeScript, Vite, and Tauri v2. It supports configurable focus/break cycles, a persistent local audio library, and saved YouTube videos controlled from the app's media toolbar.
 
-Built as a high-performance single-page application wrapped in **Tauri v2**, UberMensch runs natively on Apple Silicon with minimal RAM overhead and zero background drift.
+## Features
 
-## Key Features
+### Focus timer
 
-* **Protocol-Agnostic Engine:** Switch effortlessly between established productivity intervals or configure custom work sessions, rest breaks, and cycle frequencies:
+- **Presets:** Huberman (90 min focus / 20 min break / 3 cycles), Pomodoro (25 / 5 / 4), and Rule 52 / 17 (52 / 17 / 3).
+- **Custom sessions:** Focus duration from 1–180 minutes, break duration from 1–60 minutes, and 1–24 target cycles.
+- **Non-destructive edits:** Editing durations while a phase is running or paused does not reset its remaining time. New durations apply at the next phase. When a phase has not started yet, edits update it immediately. Cycle-count edits apply immediately.
+- **Pause precision:** Remaining milliseconds are preserved when pausing and resuming.
+- **Wall-clock timing:** The timer uses absolute phase deadlines instead of decrementing a counter. It catches up across delayed UI ticks and background suspensions by advancing from scheduled phase boundaries.
+- **Phase alerts:** Phase transitions show an in-app banner, play a short chime, update the window title, and send a system notification when the app is hidden or unfocused (subject to OS notification permission).
+- **Cycle flow:** A cycle consists of one focus block followed by its break. The session completes after the final break.
+- **Skip and reset:** Skip advances silently; Reset and selecting a preset start a fresh focus session.
 
-  * **Huberman Ultradian:** 90m focus / 20m break
+### Audio
 
-  * **Classic Pomodoro:** 25m focus / 5m break
+- **Local tracks:** Import MP3, WAV, M4A, FLAC, AAC, OGG, and other browser-supported audio files. Imported files are stored in IndexedDB for reuse in the same app storage profile.
+- **Saved YouTube streams:** Save supported YouTube watch, youtu.be, embed, Shorts, and Live links with title, channel, thumbnail, and video ID metadata.
+- **Media toolbar:** Previous, Play/Pause, Stop, Next, and volume controls work with the selected audio source.
+- **YouTube playback:** The app uses the YouTube IFrame Player API and loops the selected single video while playback remains active. Some videos cannot be embedded because of their privacy, availability, or embedding settings.
+- **Packaged desktop builds:** The YouTube player document is served by a small HTTP server bound only to `127.0.0.1` on an ephemeral port. This gives the embedded player a conventional HTTP origin/referrer in packaged Tauri WebViews while leaving the main app window on Tauri's normal origin. Browser development uses the current HTTP(S) origin.
 
-  * **Rule 52 / 17:** 52m focus / 17m break
+### Interface
 
-  * **Custom Intervals:** Fully adjustable focus duration, break duration, and target cycle limits.
+- Dark and light themes, with the selected theme remembered between launches.
+- A minimal timer display with focus/break state and cycle progress.
+- Notification permission is requested when a session is started.
 
-* **Drift-Free Wall-Clock Timing:** Calculated against absolute system timestamps (`Date.now()`). The countdown never drifts or freezes, even across system sleep, background tab throttling, or multi-hour cycles.
+## Tech stack
 
-* **Persistent Local Audio Library:** Import audio files (`.mp3`, `.wav`, `.m4a`, `.flac`, `.aac`) directly from disk. Files are converted to raw `ArrayBuffer` binaries and stored permanently in **IndexedDB**—available offline forever with zero cloud dependencies.
+| Layer | Technology |
+| ----- | ----- |
+| Desktop framework | Tauri v2 and Rust |
+| Frontend language | TypeScript |
+| Dev server and bundler | Vite |
+| Styling | Tailwind CSS |
+| Package manager | Bun |
+| Local persistence | IndexedDB and localStorage |
 
-* **YouTube Ambient Streaming:** Save focus streams or brown noise tracks by link. UberMensch automatically retrieves stream metadata (title, creator, thumbnail) via oEmbed and plays audio through an embedded headless player.
-
-* **Dedicated Media Toolbar:** Full playback controls (Previous, Play/Pause, Stop, Next, and Volume Slider) with real-time audio state indicators and seamless audio handoffs during active focus sessions.
-
-* **Distraction & Accident Guard:** Prevents accidental window closes and page reloads (`beforeunload`) while an active session is in progress.
-
-* **Native Look & Feel:** Clean dark/light theme toggle, minimalist typography, and tailored macOS window styling.
-
-## Tech Stack
-
-| Layer | Technology | 
-| ----- | ----- | 
-| **Desktop Framework** | [Tauri v2](https://tauri.app/) (Rust native wrapper) | 
-| **Runtime & Package Manager** | [Bun](https://bun.sh/) | 
-| **Bundler & Build Tool** | [Vite](https://vitejs.dev/) | 
-| **Language** | [TypeScript](https://www.typescriptlang.org/) (Strict Mode) | 
-| **Styling** | [Tailwind CSS](https://tailwindcss.com/) | 
-| **Local Storage** | WebKit [IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) | 
-
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
-* [Bun](https://bun.sh/) (v1.0+)
+- Bun
+- Rust and Cargo (for desktop builds)
+- On macOS, Xcode Command Line Tools (`xcode-select --install`)
 
-* [Rust & Cargo](https://rustup.rs/) (for Tauri desktop compilation)
+### Install dependencies
 
-* macOS with Xcode Command Line Tools (`xcode-select --install`)
-
-### Installation & Local Development
-
-1. **Clone the repository:**
-
-   ```
-   git clone https://github.com/maverickreal/UberMensch.git
-   cd UberMensch
-   
-   ```
-
-2. **Install dependencies:**
-
-   ```
-   bun install
-   
-   ```
-
-3. **Run the Vite development server (Browser Mode):**
-
-   ```
-   bun run dev
-   
-   ```
-
-   Open `http://localhost:3000` in Safari or Chrome.
-
-4. **Launch the Native Desktop App (Tauri Dev Mode):**
-
-   ```
-   bun tauri dev
-   
-   ```
-
-## Building the Desktop App
-
-To compile a production `.dmg` installer and standalone `.app` bundle for Apple Silicon (macOS):
-
+```sh
+git clone https://github.com/maverickreal/UberMensch.git
+cd UberMensch
+bun install
 ```
+
+### Run in a browser
+
+```sh
+bun run dev
+```
+
+Open the Vite URL printed in the terminal (the project currently configures port 3000).
+
+### Run the desktop app in development
+
+```sh
+bun tauri dev
+```
+
+### Build a desktop bundle
+
+```sh
 bun tauri build
-
 ```
 
-Compiled binaries are output to:
+Tauri writes packaged artifacts under `src-tauri/target/release/bundle/`. The checked-in release workflow currently builds a macOS Apple Silicon release when a `v*` tag is pushed or the workflow is manually dispatched.
 
-```
-src-tauri/target/release/bundle/
-├── dmg/
-│   └── UberMensch_<version>_aarch64.dmg
-└── macos/
-    └── UberMensch.app
+## Troubleshooting
 
-```
+| Symptom | What to check |
+| ----- | ----- |
+| YouTube remains on “Connecting” | Check the internet connection and whether a network filter blocks `youtube.com` or the IFrame API. |
+| YouTube error 101 or 150 | The video owner has disabled embedded playback; try a different video. |
+| YouTube error 100 | The video may be private, removed, or unavailable. |
+| YouTube error 153 in a packaged build | Confirm the app includes `public/yt-player.html` and the Rust loopback player endpoint starts successfully. |
+| Local audio does not autoplay | Start playback manually from the media toolbar; WebView autoplay policies can vary by platform. |
+| No system notification appears | Check the operating system's notification permission for UberMensch. |
 
-## CI / CD Deployment
+## Project layout
 
-This repository includes an automated GitHub Actions pipeline (`.github/workflows/release.yml`).
-
-Pushing a semver tag automatically compiles the app on a native Apple Silicon runner (`macos-14`) and attaches the `.dmg` installer directly to a new GitHub Release:
-
-```
-git tag v0.1.0
-git push origin v0.1.0
-
+```text
+index.html                 App markup
+src/main.ts                Timer engine, audio library, YouTube bridge, alerts
+src/style.css              Global styles and phase-change animation
+public/yt-player.html      YouTube IFrame API page
+src-tauri/src/lib.rs       Tauri setup and loopback player-page server
+scripts/release.ts         Release helper
 ```
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+MIT. See [LICENSE](LICENSE).

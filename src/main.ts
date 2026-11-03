@@ -2,8 +2,123 @@ import './style.css';
 
 declare global {
   interface Window {
-    onYouTubeIframeAPIReady: () => void;
-    YT: any;
+    onYouTubeIframeAPIReady?: () => void;
+    YT?: any;
+  }
+}
+
+type YtEvent =
+  | { type: 'ready' }
+  | { type: 'state'; state: number }
+  | { type: 'error'; code: number | string; detail?: string };
+
+type YtCommand =
+  | { cmd: 'load'; videoId: string; autoplay: boolean }
+  | { cmd: 'play' | 'pause' | 'stop' }
+  | { cmd: 'volume'; value: number };
+
+/**
+ * The packaged Tauri WebView can have a non-HTTP origin. YouTube's embedded
+ * player needs a normal HTTP referrer, so desktop builds load a tiny player
+ * document from a loopback-only Rust server. Browser builds use their current
+ * HTTP(S) origin. Only this player frame changes origin; the app shell does not.
+ */
+class YouTubeBridge {
+  public isReady = false;
+  private started = false;
+  private frame: HTMLIFrameElement | null = null;
+  private origin = '';
+  private token = '';
+  private readyTimeout: number | null = null;
+  private messageListenerRegistered = false;
+
+  constructor(private onEvent: (event: YtEvent) => void) {}
+
+  private async resolvePlayerBase(): Promise<string | null> {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const port = await invoke<number>('player_port');
+        return `http://127.0.0.1:${port}`;
+      } catch (error) {
+        console.error('Could not start the packaged YouTube player endpoint:', error);
+        return null;
+      }
+    }
+
+    if (location.protocol === 'http:' || location.protocol === 'https:') {
+      return location.origin;
+    }
+    return null;
+  }
+
+  public async init(container: HTMLElement): Promise<void> {
+    if (this.started) return;
+    this.started = true;
+    this.isReady = false;
+
+    const base = await this.resolvePlayerBase();
+    if (!base) {
+      this.started = false;
+      this.onEvent({ type: 'error', code: 'endpoint' });
+      return;
+    }
+
+    this.origin = new URL(base).origin;
+    const tokenBytes = new Uint32Array(4);
+    crypto.getRandomValues(tokenBytes);
+    this.token = Array.from(tokenBytes, value => value.toString(16)).join('');
+
+    if (!this.messageListenerRegistered) {
+      window.addEventListener('message', (event: MessageEvent) => {
+        if (!this.frame || event.source !== this.frame.contentWindow) return;
+        if (event.origin !== this.origin) return;
+        const data = event.data as (YtEvent & { token?: string }) | undefined;
+        if (!data || typeof data.type !== 'string' || data.token !== this.token) return;
+
+        if (data.type === 'ready') {
+          this.isReady = true;
+          if (this.readyTimeout !== null) {
+            window.clearTimeout(this.readyTimeout);
+            this.readyTimeout = null;
+          }
+        } else if (data.type === 'error' && !this.isReady) {
+          this.started = false;
+          if (this.readyTimeout !== null) {
+            window.clearTimeout(this.readyTimeout);
+            this.readyTimeout = null;
+          }
+        }
+        this.onEvent(data);
+      });
+      this.messageListenerRegistered = true;
+    }
+
+    const frame = document.createElement('iframe');
+    frame.src = `${base}/yt-player.html?token=${encodeURIComponent(this.token)}`;
+    frame.title = 'UberMensch YouTube audio player';
+    frame.allow = 'autoplay; encrypted-media; picture-in-picture';
+    frame.allowFullscreen = true;
+    frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+    frame.style.cssText = 'display:block;width:200px;height:200px;border:0;';
+    container.replaceChildren(frame);
+    this.frame = frame;
+
+    this.readyTimeout = window.setTimeout(() => {
+      if (!this.isReady) {
+        this.started = false;
+        this.readyTimeout = null;
+        this.onEvent({ type: 'error', code: 'timeout' });
+      }
+    }, 15000);
+  }
+
+  public send(command: YtCommand): void {
+    if (!this.isReady || !this.frame?.contentWindow) return;
+    this.frame.contentWindow.postMessage(
+      { ...command, __ubermensch: true, token: this.token },
+      this.origin,
+    );
   }
 }
 
@@ -171,6 +286,7 @@ class FocusApp {
   private isRunning: boolean = false;
   
   private phaseEndTime: number | null = null;
+  private pausedRemainingMs: number | null = null;
 
   // Phase-change alerting
   private audioCtx: AudioContext | null = null;
@@ -187,8 +303,8 @@ class FocusApp {
 
   private ytStreams: YouTubeStream[] = [];
   private activeYtStream: YouTubeStream | null = null;
-  private ytPlayer: any = null;
-  private isYtReady: boolean = false;
+  private yt = new YouTubeBridge((event) => this.handleYtEvent(event));
+  private pendingYtPlay: boolean = false;
 
   // DOM Elements - Navigation & Header
   private ghRepoLink = document.getElementById('ghRepoLink') as HTMLAnchorElement | null;
@@ -223,9 +339,11 @@ class FocusApp {
   private sourceLocalBtn = document.getElementById('sourceLocalBtn') as HTMLButtonElement;
   private sourceYtBtn = document.getElementById('sourceYtBtn') as HTMLButtonElement;
   private ytTabDot = document.getElementById('ytTabDot') as HTMLSpanElement;
+  private ytApiBannerText = document.getElementById('ytApiBannerText') as HTMLSpanElement;
   private localAudioContainer = document.getElementById('localAudioContainer') as HTMLDivElement;
   private ytInputContainer = document.getElementById('ytInputContainer') as HTMLDivElement;
   private ytApiBanner = document.getElementById('ytApiBanner') as HTMLDivElement;
+  private ytPlayerContainer = document.getElementById('ytPlayerContainer') as HTMLDivElement;
 
   // Local Tracks UI
   private audioTrackSelect = document.getElementById('audioTrackSelect') as HTMLSelectElement;
@@ -262,7 +380,6 @@ class FocusApp {
   constructor() {
     this.initTheme();
     this.initEventListeners();
-    this.initYouTubeAPI();
     this.initStorageAndMedia();
     this.applyConfig();
   }
@@ -321,7 +438,7 @@ class FocusApp {
     });
 
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && this.isRunning && this.phaseEndTime) {
+      if (!document.hidden && this.isRunning && this.phaseEndTime !== null) {
         this.tick();
       }
     });
@@ -336,13 +453,7 @@ class FocusApp {
       });
     });
 
-    const onConfigChange = () => {
-      this.setProtocol(
-        parseInt(this.workInput.value) || 25,
-        parseInt(this.breakInput.value) || 5,
-        parseInt(this.cyclesInput.value) || 1
-      );
-    };
+    const onConfigChange = () => this.handleConfigEdit();
 
     this.workInput.addEventListener('change', onConfigChange);
     this.breakInput.addEventListener('change', onConfigChange);
@@ -523,14 +634,39 @@ class FocusApp {
 
   // --- YOUTUBE STREAMS MANAGEMENT ---
 
-  private extractYouTubeID(url: string): string | null {
-    const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
-    return match ? match[1] : null;
+  private extractYouTubeID(input: string): string | null {
+    try {
+      const raw = input.trim();
+      const normalized = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+      const parsed = new URL(normalized);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+      const isShortHost = host === 'youtu.be';
+      const isYouTubeHost =
+        host === 'youtube.com' || host.endsWith('.youtube.com') ||
+        host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com');
+      if (!isShortHost && !isYouTubeHost) return null;
+
+      let videoId: string | null = null;
+      if (isShortHost) {
+        videoId = parsed.pathname.split('/').filter(Boolean)[0] ?? null;
+      } else {
+        videoId = parsed.searchParams.get('v');
+        if (!videoId) {
+          videoId = parsed.pathname.match(/^\/(?:embed|v|shorts|live)\/([^/?]+)/)?.[1] ?? null;
+        }
+      }
+
+      return videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId) ? videoId : null;
+    } catch {
+      return null;
+    }
   }
 
   private async fetchYouTubeMetadata(videoId: string): Promise<{ title: string; author: string }> {
     try {
-      const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+      const videoUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+      const response = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl)}&format=json`);
       if (response.ok) {
         const data = await response.json();
         return {
@@ -621,12 +757,11 @@ class FocusApp {
 
   private handleYouTubeSelect(): void {
     const selectedId = this.ytStreamSelect.value;
-    const stream = this.ytStreams.find(s => s.id === selectedId);
+    const stream = this.ytStreams.find(item => item.id === selectedId);
 
     if (stream) {
       this.activeYtStream = stream;
       localStorage.setItem('selectedYtStreamId', stream.id);
-
       this.ytThumb.src = stream.thumbnailUrl;
       this.ytTitle.innerText = stream.title;
       this.ytAuthor.innerText = stream.author;
@@ -634,14 +769,17 @@ class FocusApp {
       this.ytExternalLink.href = stream.url;
       this.ytInfoCard.classList.remove('hidden');
 
-      if (this.ytPlayer && this.isYtReady) {
-        this.ytPlayer.cueVideoById(stream.videoId);
-        if (this.isMediaPlaying && this.audioMode === 'youtube') {
-          this.ytPlayer.playVideo();
-        }
+      if (this.yt.isReady) {
+        this.yt.send({
+          cmd: 'load',
+          videoId: stream.videoId,
+          autoplay: this.isMediaPlaying && this.audioMode === 'youtube',
+        });
       }
     } else {
       this.activeYtStream = null;
+      this.pendingYtPlay = false;
+      if (this.yt.isReady) this.yt.send({ cmd: 'stop' });
       this.ytInfoCard.classList.add('hidden');
     }
     this.updateMediaControlsUI();
@@ -703,8 +841,9 @@ class FocusApp {
     this.pauseAudio();
     if (this.audioMode === 'local') {
       this.localAudio.currentTime = 0;
-    } else if (this.audioMode === 'youtube' && this.ytPlayer && this.isYtReady) {
-      this.ytPlayer.seekTo(0, true);
+    } else {
+      this.pendingYtPlay = false;
+      if (this.yt.isReady) this.yt.send({ cmd: 'stop' });
     }
     this.mediaPlayingStatus.innerText = 'Audio Stopped';
   }
@@ -752,15 +891,55 @@ class FocusApp {
     this.breakInput.value = rest.toString();
     this.cyclesInput.value = cycles.toString();
 
+    // Presets deliberately begin a fresh session; manual field edits do not.
     this.resetTimer();
   }
 
   private applyConfig(): void {
-    this.totalPhaseSeconds = this.currentPhase === 'work' 
-      ? this.config.workMinutes * 60 
+    this.totalPhaseSeconds = this.currentPhase === 'work'
+      ? this.config.workMinutes * 60
       : this.config.breakMinutes * 60;
     this.secondsRemaining = this.totalPhaseSeconds;
+    this.pausedRemainingMs = null;
     this.updateDisplay();
+  }
+
+  private readNumberInput(input: HTMLInputElement, fallback: number): number {
+    const min = Number.parseInt(input.min, 10);
+    const max = Number.parseInt(input.max, 10);
+    let value = Number.parseInt(input.value, 10);
+    if (!Number.isFinite(value)) value = fallback;
+    if (Number.isFinite(min)) value = Math.max(min, value);
+    if (Number.isFinite(max)) value = Math.min(max, value);
+    input.value = value.toString();
+    return value;
+  }
+
+  private handleConfigEdit(): void {
+    const work = this.readNumberInput(this.workInput, this.config.workMinutes);
+    const rest = this.readNumberInput(this.breakInput, this.config.breakMinutes);
+    const cycles = this.readNumberInput(this.cyclesInput, this.config.totalCycles);
+    const durationsChanged = work !== this.config.workMinutes || rest !== this.config.breakMinutes;
+    const cyclesChanged = cycles !== this.config.totalCycles;
+    if (!durationsChanged && !cyclesChanged) return;
+
+    this.config.workMinutes = work;
+    this.config.breakMinutes = rest;
+    this.config.totalCycles = cycles;
+
+    // Before a phase has started, new durations update it immediately. Once
+    // running or paused after a start, keep its remaining time and use the new
+    // duration at the next phase boundary.
+    const phaseUntouched =
+      !this.isRunning &&
+      this.pausedRemainingMs === null &&
+      this.secondsRemaining === this.totalPhaseSeconds;
+
+    if (durationsChanged && phaseUntouched) {
+      this.applyConfig();
+    } else {
+      this.updateDisplay();
+    }
   }
 
   private toggleTimer(): void {
@@ -773,7 +952,9 @@ class FocusApp {
 
   private startTimer(audioDelayMs: number = 0): void {
     this.isRunning = true;
-    this.phaseEndTime = Date.now() + this.secondsRemaining * 1000;
+    const remainingMs = this.pausedRemainingMs ?? this.secondsRemaining * 1000;
+    this.pausedRemainingMs = null;
+    this.phaseEndTime = Date.now() + remainingMs;
 
     // Starting is always a user gesture on the first run, so this is the right
     // moment to unlock the chime's audio context and ask for notification access.
@@ -805,23 +986,65 @@ class FocusApp {
   }
 
   private tick(): void {
-    if (!this.phaseEndTime) return;
-    const remainingMs = this.phaseEndTime - Date.now();
-    const remainingSec = Math.max(0, Math.ceil(remainingMs / 1000));
+    if (this.phaseEndTime === null) return;
 
-    if (remainingSec > 0) {
-      this.secondsRemaining = remainingSec;
+    const now = Date.now();
+    let latestTransition: TimerPhase | null = null;
+    let completed = false;
+
+    // Advance from scheduled boundaries, not from the time the UI happened to
+    // wake up. This also catches up correctly after a long background suspend.
+    while (this.phaseEndTime !== null && now >= this.phaseEndTime) {
+      const boundary: number = this.phaseEndTime;
+
+      if (this.currentPhase === 'work') {
+        this.currentPhase = 'break';
+      } else if (this.currentCycle >= this.config.totalCycles) {
+        this.phaseEndTime = null;
+        completed = true;
+        break;
+      } else {
+        this.currentCycle += 1;
+        this.currentPhase = 'work';
+      }
+
+      this.totalPhaseSeconds = (this.currentPhase === 'work'
+        ? this.config.workMinutes
+        : this.config.breakMinutes) * 60;
+      this.phaseEndTime = boundary + this.totalPhaseSeconds * 1000;
+      latestTransition = this.currentPhase;
+    }
+
+    if (completed) {
+      this.completeSession(false);
+      return;
+    }
+
+    if (latestTransition !== null) {
+      this.pauseAudio();
+      if (this.audioDelayTimeout !== null) {
+        window.clearTimeout(this.audioDelayTimeout);
+        this.audioDelayTimeout = null;
+      }
+      if (this.currentPhase === 'work' && this.autoPlayCheck.checked) {
+        this.audioDelayTimeout = window.setTimeout(() => {
+          this.audioDelayTimeout = null;
+          if (this.isRunning && this.currentPhase === 'work') this.playAudio();
+        }, 1600);
+      }
+      this.notifyPhaseChange(latestTransition);
+    }
+
+    if (this.phaseEndTime !== null) {
+      this.secondsRemaining = Math.max(0, Math.ceil((this.phaseEndTime - now) / 1000));
       this.updateDisplay();
-    } else {
-      this.secondsRemaining = 0;
-      this.updateDisplay();
-      this.handlePhaseTransition();
     }
   }
 
   private pauseTimer(): void {
-    if (this.phaseEndTime) {
-      this.secondsRemaining = Math.max(0, Math.ceil((this.phaseEndTime - Date.now()) / 1000));
+    if (this.phaseEndTime !== null) {
+      this.pausedRemainingMs = Math.max(0, this.phaseEndTime - Date.now());
+      this.secondsRemaining = Math.ceil(this.pausedRemainingMs / 1000);
       this.phaseEndTime = null;
     }
 
@@ -842,6 +1065,7 @@ class FocusApp {
     this.hideBanner();
     this.pauseTimer();
     this.phaseEndTime = null;
+    this.pausedRemainingMs = null;
     this.currentPhase = 'work';
     this.currentCycle = 1;
     this.startPauseBtn.innerText = 'Start Focus';
@@ -946,7 +1170,8 @@ class FocusApp {
   }
 
   private notifyPhaseChange(kind: 'work' | 'break' | 'done', silent: boolean = false): void {
-    const { workMinutes, breakMinutes, totalCycles } = this.config;
+    const { workMinutes, breakMinutes } = this.config;
+    const totalCycles = Math.max(this.currentCycle, this.config.totalCycles);
     let icon: string;
     let title: string;
     let body: string;
@@ -1052,7 +1277,7 @@ class FocusApp {
     const progress = ((this.totalPhaseSeconds - this.secondsRemaining) / this.totalPhaseSeconds) * 100;
     this.progressBar.style.width = `${progress}%`;
 
-    this.cycleTracker.innerText = `Cycle ${this.currentCycle} / ${this.config.totalCycles}`;
+    this.cycleTracker.innerText = `Cycle ${this.currentCycle} / ${Math.max(this.currentCycle, this.config.totalCycles)}`;
     if (this.currentPhase === 'work') {
       this.phaseBadge.innerText = 'Focus';
       this.phaseBadge.className = 'text-xs font-semibold px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300';
@@ -1081,6 +1306,7 @@ class FocusApp {
       this.sourceLocalBtn.className = 'flex-1 py-1.5 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors';
       this.localAudioContainer.classList.add('hidden');
       this.ytInputContainer.classList.remove('hidden');
+      this.initYouTube();
     }
 
     if (wasPlaying || (this.isRunning && this.currentPhase === 'work' && this.autoPlayCheck.checked)) {
@@ -1093,8 +1319,8 @@ class FocusApp {
   private handleVolumeChange(): void {
     const val = parseFloat(this.volumeSlider.value);
     this.localAudio.volume = val;
-    if (this.ytPlayer && this.isYtReady) {
-      this.ytPlayer.setVolume(val * 100);
+    if (this.yt.isReady) {
+      this.yt.send({ cmd: 'volume', value: val * 100 });
     }
   }
 
@@ -1110,82 +1336,106 @@ class FocusApp {
           this.isMediaPlaying = true;
           this.updateMediaControlsUI();
         })
-        .catch((err) => {
+        .catch((err: DOMException) => {
           console.error('Audio play error:', err);
-          if (err.name === 'NotAllowedError') {
-            this.mediaPlayingStatus.innerText = 'Safari blocked autoplay';
-          } else {
-            this.mediaPlayingStatus.innerText = 'Format unsupported';
-          }
+          this.mediaPlayingStatus.innerText = err.name === 'NotAllowedError'
+            ? 'WebView blocked autoplay; press Play to retry'
+            : 'Audio format unsupported';
           this.isMediaPlaying = false;
           this.updateMediaControlsUI();
         });
     } else if (this.audioMode === 'youtube') {
-      if (!this.isYtReady) {
-        this.mediaPlayingStatus.innerText = 'Waiting on YouTube API...';
+      if (!this.activeYtStream) {
+        this.mediaPlayingStatus.innerText = 'No YouTube stream selected';
         return;
       }
-      if (this.ytPlayer && this.activeYtStream) {
-        this.ytPlayer.playVideo();
-        this.isMediaPlaying = true;
-        this.updateMediaControlsUI();
+      if (!this.yt.isReady) {
+        this.pendingYtPlay = true;
+        this.mediaPlayingStatus.innerText = 'Connecting to YouTube...';
+        return;
       }
+      this.yt.send({ cmd: 'play' });
+      this.isMediaPlaying = true;
+      this.updateMediaControlsUI();
     }
   }
 
   private pauseAudio(): void {
     if (this.audioMode === 'local') {
       this.localAudio.pause();
-    }
-    if (this.ytPlayer && this.isYtReady) {
-      this.ytPlayer.pauseVideo();
+    } else {
+      this.pendingYtPlay = false;
+      if (this.yt.isReady) this.yt.send({ cmd: 'pause' });
     }
     this.isMediaPlaying = false;
     this.updateMediaControlsUI();
   }
 
-  private initYouTubeAPI(): void {
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    const firstScriptTag = document.getElementsByTagName('script')[0];
-    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
-
-    window.onYouTubeIframeAPIReady = () => {
-      this.ytPlayer = new window.YT.Player('ytPlayerContainer', {
-        height: '0',
-        width: '0',
-        playerVars: {
-          autoplay: 0,
-          controls: 0,
-          loop: 1,
-        },
-        events: {
-          onReady: () => {
-            this.isYtReady = true;
-            this.handleVolumeChange();
-            
-            this.ytTabDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500';
-            this.ytTabDot.title = 'YouTube API Connected';
-            this.ytApiBanner.classList.add('hidden');
-
-            if (this.activeYtStream) {
-              this.ytPlayer.cueVideoById(this.activeYtStream.videoId);
-            }
-          },
-          onStateChange: (event: any) => {
-            if (this.audioMode === 'youtube') {
-              if (event.data === 1) {
-                this.isMediaPlaying = true;
-              } else if (event.data === 2 || event.data === 0) {
-                this.isMediaPlaying = false;
-              }
-              this.updateMediaControlsUI();
-            }
-          },
-        },
-      });
-    };
+  private initYouTube(): void {
+    void this.yt.init(this.ytPlayerContainer);
   }
+
+  private handleYtEvent(event: YtEvent): void {
+    switch (event.type) {
+      case 'ready': {
+        this.ytTabDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500';
+        this.ytTabDot.title = 'YouTube player connected';
+        this.ytApiBanner.classList.add('hidden');
+        this.handleVolumeChange();
+        if (this.activeYtStream) {
+          const shouldPlay = this.pendingYtPlay || (this.isMediaPlaying && this.audioMode === 'youtube');
+          this.yt.send({ cmd: 'load', videoId: this.activeYtStream.videoId, autoplay: shouldPlay });
+          this.pendingYtPlay = false;
+        }
+        break;
+      }
+      case 'state':
+        if (this.audioMode !== 'youtube') break;
+        if (event.state === 1) {
+          this.isMediaPlaying = true;
+          this.clearYtError();
+        } else if (event.state === 2 || event.state === 0) {
+          this.isMediaPlaying = false;
+        }
+        this.updateMediaControlsUI();
+        break;
+      case 'error':
+        this.pendingYtPlay = false;
+        this.isMediaPlaying = false;
+        this.showYtError(event.code, event.detail);
+        this.updateMediaControlsUI();
+        break;
+    }
+  }
+
+  private showYtError(code: number | string, detail?: string): void {
+    const messages: Record<string, string> = {
+      '2': 'The YouTube URL or video ID is invalid.',
+      '5': 'The YouTube player encountered an HTML5 playback error.',
+      '100': 'This YouTube video is unavailable, private, or removed.',
+      '101': 'The video owner has disabled embedded playback.',
+      '150': 'The video owner has disabled embedded playback.',
+      '153': 'YouTube did not receive the player client identification (HTTP referrer).',
+      endpoint: 'Could not start UberMensch’s local YouTube player endpoint.',
+      network: 'Could not load the YouTube IFrame API. Check your connection.',
+      timeout: 'The YouTube player did not become ready within 15 seconds. Select YouTube again to retry.',
+      autoplay: 'The WebView blocked scripted YouTube playback. Press Play again or check its autoplay settings.',
+      player: 'The YouTube player reported an internal error.',
+    };
+    const message = messages[String(code)] ?? `YouTube player error (${code}).`;
+    this.ytApiBannerText.innerText = detail ? `${message} ${detail}` : message;
+    this.ytApiBanner.classList.remove('hidden');
+    this.ytTabDot.className = 'w-1.5 h-1.5 rounded-full bg-rose-500';
+    this.ytTabDot.title = message;
+    this.mediaPlayingStatus.innerText = message;
+  }
+
+  private clearYtError(): void {
+    this.ytApiBanner.classList.add('hidden');
+    this.ytTabDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500';
+    this.ytTabDot.title = 'YouTube player connected';
+  }
+
 }
 
 window.addEventListener('DOMContentLoaded', () => {

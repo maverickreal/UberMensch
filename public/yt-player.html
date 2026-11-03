@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <title>UberMensch YouTube Player</title>
+  <style>
+    html, body, #player { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    iframe { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="player"></div>
+  <script>
+    (function () {
+      var token = new URLSearchParams(location.search).get('token') || '';
+      var player = null;
+      var ready = false;
+      var queue = [];
+      var wantPlaying = false;
+      var currentVideoId = null;
+      var volume = 80;
+      var parentOrigin = null;
+
+      function post(message) {
+        try {
+          message.token = token;
+          var target = parentOrigin && parentOrigin !== 'null' ? parentOrigin : '*';
+          window.parent.postMessage(message, target);
+        } catch (error) {
+          // The parent window may already have closed.
+        }
+      }
+
+      function run(message) {
+        if (!ready || !player) { queue.push(message); return; }
+        try {
+          switch (message.cmd) {
+            case 'load':
+              currentVideoId = message.videoId;
+              wantPlaying = Boolean(message.autoplay);
+              if (message.autoplay) player.loadVideoById(message.videoId);
+              else player.cueVideoById(message.videoId);
+              break;
+            case 'play':
+              wantPlaying = true;
+              if (currentVideoId) player.playVideo();
+              break;
+            case 'pause':
+              wantPlaying = false;
+              player.pauseVideo();
+              break;
+            case 'stop':
+              wantPlaying = false;
+              player.pauseVideo();
+              player.seekTo(0, true);
+              break;
+            case 'volume':
+              volume = Math.max(0, Math.min(100, Number(message.value) || 0));
+              player.setVolume(volume);
+              break;
+          }
+        } catch (error) {
+          post({ type: 'error', code: 'player', detail: String(error) });
+        }
+      }
+
+      window.addEventListener('message', function (event) {
+        if (event.source !== window.parent) return;
+        if (!event.data || event.data.__ubermensch !== true || event.data.token !== token) return;
+        if (parentOrigin && event.origin !== parentOrigin) return;
+        parentOrigin = event.origin;
+        run(event.data);
+      });
+
+      window.onYouTubeIframeAPIReady = function () {
+        player = new YT.Player('player', {
+          width: '200',
+          height: '200',
+          playerVars: {
+            autoplay: 0,
+            controls: 0,
+            playsinline: 1,
+            rel: 0,
+            origin: location.origin
+          },
+          events: {
+            onReady: function () {
+              ready = true;
+              player.setVolume(volume);
+              post({ type: 'ready' });
+              var pending = queue;
+              queue = [];
+              pending.forEach(run);
+            },
+            onStateChange: function (event) {
+              // YouTube's loop=1 requires a playlist for a single video. Loop
+              // the active video explicitly while the app's play state is on.
+              if (event.data === YT.PlayerState.ENDED && wantPlaying && currentVideoId) {
+                player.seekTo(0, true);
+                player.playVideo();
+                return;
+              }
+              post({ type: 'state', state: event.data });
+            },
+            onError: function (event) {
+              wantPlaying = false;
+              post({ type: 'error', code: event.data });
+            },
+            onAutoplayBlocked: function () {
+              wantPlaying = false;
+              post({ type: 'error', code: 'autoplay' });
+            }
+          }
+        });
+      };
+
+      var script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      script.onerror = function () { post({ type: 'error', code: 'network' }); };
+      document.head.appendChild(script);
+    })();
+  </script>
+</body>
+</html>
