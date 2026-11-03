@@ -20,14 +20,47 @@ if (!semverRegex.test(version)) {
 const tag = `v${version}`;
 const rootDir = resolve(__dirname, '..');
 
-// 2. Paths to configuration files
+// 2. Pre-flight Git Checks
+try {
+  // Ensure we are on the main branch
+  const branch = execSync('git branch --show-current').toString().trim();
+  if (branch !== 'main') {
+    console.error(`\x1b[31mError:\x1b[0m Releases must be cut from "main" branch (currently on "${branch}").`);
+    process.exit(1);
+  }
+
+  // Ensure working directory is completely clean (no untracked, unstaged, or staged changes)
+  const status = execSync('git status --porcelain').toString().trim();
+  if (status) {
+    console.error('\n\x1b[31mError: Working directory has uncommitted or unstaged changes:\x1b[0m');
+    console.error(status);
+    console.error('\n\x1b[33mPlease commit, stash, or discard all changes before running a release.\x1b[0m\n');
+    process.exit(1);
+  }
+
+  // Check if tag already exists locally
+  try {
+    execSync(`git rev-parse "${tag}"`, { stdio: 'ignore' });
+    console.error(`\x1b[31mError:\x1b[0m Git tag "${tag}" already exists locally. Bump the version.`);
+    process.exit(1);
+  } catch {
+    // Tag does not exist locally; continue
+  }
+} catch (err: any) {
+  if (err.status !== undefined && err.status !== 0 && !err.message.includes('rev-parse')) {
+    console.error('\x1b[31mGit pre-check failed:\x1b[0m', err.message);
+    process.exit(1);
+  }
+}
+
+// 3. Paths to configuration files
 const pkgPath = resolve(rootDir, 'package.json');
 const tauriPath = resolve(rootDir, 'src-tauri/tauri.conf.json');
 const cargoPath = resolve(rootDir, 'src-tauri/Cargo.toml');
 
 console.log(`\n\x1b[36m🚀 Preparing release ${tag}...\x1b[0m\n`);
 
-// 3. Update package.json
+// 4. Update package.json
 if (existsSync(pkgPath)) {
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
   pkg.version = version;
@@ -35,7 +68,7 @@ if (existsSync(pkgPath)) {
   console.log(`  ✓ Updated package.json to ${version}`);
 }
 
-// 4. Update src-tauri/tauri.conf.json
+// 5. Update src-tauri/tauri.conf.json
 if (existsSync(tauriPath)) {
   const tauri = JSON.parse(readFileSync(tauriPath, 'utf8'));
   tauri.version = version;
@@ -43,7 +76,7 @@ if (existsSync(tauriPath)) {
   console.log(`  ✓ Updated src-tauri/tauri.conf.json to ${version}`);
 }
 
-// 5. Update src-tauri/Cargo.toml (keeps Rust workspace in sync)
+// 6. Update src-tauri/Cargo.toml (keeps Rust workspace in sync)
 if (existsSync(cargoPath)) {
   let cargoContent = readFileSync(cargoPath, 'utf8');
   cargoContent = cargoContent.replace(/^version = ".*?"/m, `version = "${version}"`);
@@ -51,10 +84,10 @@ if (existsSync(cargoPath)) {
   console.log(`  ✓ Updated src-tauri/Cargo.toml to ${version}`);
 }
 
-// 6. Git commit, tag, and push
+// 7. Git commit, tag, and push
 try {
   console.log('\n\x1b[36m📦 Committing and pushing to GitHub...\x1b[0m\n');
-  
+
   execSync(`git add "${pkgPath}" "${tauriPath}" "${cargoPath}"`, { stdio: 'inherit' });
   execSync(`git commit -m "chore(release): bump version to ${tag}"`, { stdio: 'inherit' });
   execSync(`git tag -a "${tag}" -m "Release ${tag}"`, { stdio: 'inherit' });
@@ -64,6 +97,6 @@ try {
   console.log(`\n\x1b[32m✔ Successfully released and pushed ${tag}!\x1b[0m`);
   console.log('GitHub Actions is now compiling your DMG bundle.\n');
 } catch (error) {
-  console.error('\n\x1b[31mGit command failed:\x1b[0m', error);
+  console.error('\n\x1b[31mGit release execution failed:\x1b[0m', error);
   process.exit(1);
 }
