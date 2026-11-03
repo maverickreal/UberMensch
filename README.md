@@ -66,7 +66,7 @@ brew uninstall --cask ubermensch
 The distributed app is currently **not notarized/signed in a way that satisfies Gatekeeper**, so macOS may block it the first time you open it. After installing it with Homebrew, run:
 
 ```sh
-sudo xattr -rd com.apple.quarantine /Applications/UberMensch.app
+xattr -cr /Applications/UberMensch.app
 ```
 
 Then open UberMensch from Applications or Spotlight.
@@ -74,7 +74,7 @@ Then open UberMensch from Applications or Spotlight.
 If you installed it somewhere other than `/Applications`, adjust the app path accordingly. For example, to remove the quarantine attribute from an app in your Downloads folder:
 
 ```sh
-sudo xattr -rd com.apple.quarantine "$HOME/Downloads/UberMensch.app"
+xattr -cr "$HOME/Downloads/UberMensch.app"
 ```
 
 This removes the quarantine metadata from **UberMensch.app only**. It does not disable Gatekeeper system-wide. You may be prompted for your macOS password; Terminal does not display password characters while you type.
@@ -90,7 +90,7 @@ You can also download the disk image directly from the [UberMensch Releases page
 3. Run the quarantine-removal command shown above:
 
    ```sh
-   sudo xattr -rd com.apple.quarantine /Applications/UberMensch.app
+   xattr -cr /Applications/UberMensch.app
    ```
 
 4. Launch UberMensch from Applications or Spotlight.
