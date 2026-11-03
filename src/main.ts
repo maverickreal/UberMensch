@@ -172,6 +172,12 @@ class FocusApp {
   
   private phaseEndTime: number | null = null;
 
+  // Phase-change alerting
+  private audioCtx: AudioContext | null = null;
+  private audioDelayTimeout: number | null = null;
+  private nudgeTimeout: number | null = null;
+  private bannerActive: boolean = false;
+
   private audioMode: 'local' | 'youtube' = 'local';
   private isMediaPlaying: boolean = false;
   private appStorage = new AppStorage();
@@ -197,6 +203,14 @@ class FocusApp {
   private startPauseBtn = document.getElementById('startPauseBtn') as HTMLButtonElement;
   private skipBtn = document.getElementById('skipBtn') as HTMLButtonElement;
   private resetBtn = document.getElementById('resetBtn') as HTMLButtonElement;
+  private timerCard = document.getElementById('timerCard') as HTMLDivElement;
+
+  // Phase-change banner
+  private phaseBanner = document.getElementById('phaseBanner') as HTMLDivElement;
+  private phaseBannerIcon = document.getElementById('phaseBannerIcon') as HTMLSpanElement;
+  private phaseBannerTitle = document.getElementById('phaseBannerTitle') as HTMLParagraphElement;
+  private phaseBannerBody = document.getElementById('phaseBannerBody') as HTMLParagraphElement;
+  private phaseBannerDismiss = document.getElementById('phaseBannerDismiss') as HTMLButtonElement;
 
   private workInput = document.getElementById('workDurationInput') as HTMLInputElement;
   private breakInput = document.getElementById('breakDurationInput') as HTMLInputElement;
@@ -297,6 +311,7 @@ class FocusApp {
     this.startPauseBtn.addEventListener('click', () => this.toggleTimer());
     this.resetBtn.addEventListener('click', () => this.resetTimer());
     this.skipBtn.addEventListener('click', () => this.skipPhase());
+    this.phaseBannerDismiss.addEventListener('click', () => this.hideBanner());
 
     window.addEventListener('beforeunload', (e) => {
       if (this.isRunning) {
@@ -756,16 +771,33 @@ class FocusApp {
     }
   }
 
-  private startTimer(): void {
+  private startTimer(audioDelayMs: number = 0): void {
     this.isRunning = true;
     this.phaseEndTime = Date.now() + this.secondsRemaining * 1000;
+
+    // Starting is always a user gesture on the first run, so this is the right
+    // moment to unlock the chime's audio context and ask for notification access.
+    this.ensureAudioContext();
+    void this.requestNotificationPermission();
 
     this.startPauseBtn.innerText = 'Pause';
     this.startPauseBtn.classList.replace('bg-zinc-900', 'bg-amber-600');
     this.startPauseBtn.classList.replace('dark:bg-zinc-100', 'dark:bg-amber-500');
 
+    if (this.audioDelayTimeout) {
+      clearTimeout(this.audioDelayTimeout);
+      this.audioDelayTimeout = null;
+    }
     if (this.currentPhase === 'work' && this.autoPlayCheck.checked) {
-      this.playAudio();
+      if (audioDelayMs > 0) {
+        // Let the chime finish before the ambient audio comes back in
+        this.audioDelayTimeout = window.setTimeout(() => {
+          this.audioDelayTimeout = null;
+          if (this.isRunning && this.currentPhase === 'work') this.playAudio();
+        }, audioDelayMs);
+      } else {
+        this.playAudio();
+      }
     }
 
     if (this.timerInterval) clearInterval(this.timerInterval);
@@ -799,10 +831,15 @@ class FocusApp {
     this.startPauseBtn.classList.replace('dark:bg-amber-500', 'dark:bg-zinc-100');
 
     if (this.timerInterval) clearInterval(this.timerInterval);
+    if (this.audioDelayTimeout) {
+      clearTimeout(this.audioDelayTimeout);
+      this.audioDelayTimeout = null;
+    }
     this.pauseAudio();
   }
 
   private resetTimer(): void {
+    this.hideBanner();
     this.pauseTimer();
     this.phaseEndTime = null;
     this.currentPhase = 'work';
@@ -813,22 +850,195 @@ class FocusApp {
 
   private skipPhase(): void {
     this.pauseTimer();
-    this.handlePhaseTransition();
+    // The user triggered this themselves, so no chime or banner is needed
+    this.handlePhaseTransition(true);
   }
 
-  private handlePhaseTransition(): void {
+  private handlePhaseTransition(silent: boolean = false): void {
     if (this.timerInterval) clearInterval(this.timerInterval);
     this.pauseAudio();
 
     if (this.currentPhase === 'work') {
       this.currentPhase = 'break';
     } else {
+      // A cycle is one focus block plus its break. After the last break, stop.
+      if (this.currentCycle >= this.config.totalCycles) {
+        this.completeSession(silent);
+        return;
+      }
+      this.currentCycle += 1;
       this.currentPhase = 'work';
-      this.currentCycle = this.currentCycle >= this.config.totalCycles ? 1 : this.currentCycle + 1;
     }
 
     this.applyConfig();
-    this.startTimer();
+    this.startTimer(silent ? 0 : 1600);
+    if (!silent) this.notifyPhaseChange(this.currentPhase);
+  }
+
+  private completeSession(silent: boolean): void {
+    this.resetTimer();
+    this.notifyPhaseChange('done', silent);
+  }
+
+  // --- PHASE CHANGE ALERTS ---
+
+  private ensureAudioContext(): void {
+    try {
+      if (!this.audioCtx) {
+        const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+        if (Ctor) this.audioCtx = new Ctor();
+      }
+      if (this.audioCtx && this.audioCtx.state === 'suspended') {
+        void this.audioCtx.resume();
+      }
+    } catch (err) {
+      console.warn('Web Audio unavailable, chime disabled:', err);
+    }
+  }
+
+  // The webview inside the Tauri desktop app has no web Notification support,
+  // so there we go through the native notification plugin instead.
+  private isTauri(): boolean {
+    return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  }
+
+  private async requestNotificationPermission(): Promise<void> {
+    try {
+      if (this.isTauri()) {
+        const { isPermissionGranted, requestPermission } = await import('@tauri-apps/plugin-notification');
+        if (!(await isPermissionGranted())) {
+          await requestPermission();
+        }
+      } else if ('Notification' in window && Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    } catch (err) {
+      console.warn('Notification permission unavailable:', err);
+    }
+  }
+
+  // Three soft notes: rising for "back to focus", falling for "break time"
+  private playChime(kind: 'work' | 'break' | 'done'): void {
+    const ctx = this.audioCtx;
+    if (!ctx) return;
+
+    const notes =
+      kind === 'work' ? [523.25, 659.25, 783.99] :
+      kind === 'break' ? [783.99, 659.25, 523.25] :
+      [523.25, 659.25, 783.99, 1046.5];
+
+    const peak = Math.max(0.15, parseFloat(this.volumeSlider.value) || 0.8) * 0.25;
+    const start = ctx.currentTime + 0.02;
+
+    notes.forEach((freq, i) => {
+      const t = start + i * 0.22;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(peak, t + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.95);
+    });
+  }
+
+  private notifyPhaseChange(kind: 'work' | 'break' | 'done', silent: boolean = false): void {
+    const { workMinutes, breakMinutes, totalCycles } = this.config;
+    let icon: string;
+    let title: string;
+    let body: string;
+    let tone: string;
+    let flash: string;
+
+    if (kind === 'break') {
+      icon = '☕';
+      title = 'Break time';
+      body = `Focus block ${this.currentCycle} of ${totalCycles} is done. Step away for ${breakMinutes} min and rest your eyes.`;
+      tone = 'bg-blue-50/95 border-blue-300 text-blue-900 dark:bg-blue-950/95 dark:border-blue-800 dark:text-blue-100';
+      flash = 'rgba(59, 130, 246, 0.35)';
+    } else if (kind === 'work') {
+      icon = '🎯';
+      title = 'Back to focus';
+      body = `Cycle ${this.currentCycle} of ${totalCycles}. ${workMinutes} min of deep work starts now.`;
+      tone = 'bg-emerald-50/95 border-emerald-300 text-emerald-900 dark:bg-emerald-950/95 dark:border-emerald-800 dark:text-emerald-100';
+      flash = 'rgba(16, 185, 129, 0.35)';
+    } else {
+      icon = '🎉';
+      title = 'Session complete';
+      body = `You finished all ${totalCycles} cycles. Nicely done.`;
+      tone = 'bg-amber-50/95 border-amber-300 text-amber-900 dark:bg-amber-950/95 dark:border-amber-800 dark:text-amber-100';
+      flash = 'rgba(245, 158, 11, 0.35)';
+    }
+
+    if (!silent) this.playChime(kind);
+
+    if (silent && kind !== 'done') return;
+
+    this.showBanner(icon, title, body, tone);
+    this.timerCard.style.setProperty('--flash-color', flash);
+    this.timerCard.classList.remove('phase-flash');
+    void this.timerCard.offsetWidth; // restart the animation
+    this.timerCard.classList.add('phase-flash');
+
+    if (!silent) {
+      void this.sendSystemNotification(title, body);
+      // If it still hasn't been acknowledged, nudge softly a couple of times
+      if (kind !== 'done') this.scheduleNudge(kind, 2);
+    }
+  }
+
+  private showBanner(icon: string, title: string, body: string, toneClasses: string): void {
+    this.phaseBannerIcon.innerText = icon;
+    this.phaseBannerTitle.innerText = title;
+    this.phaseBannerBody.innerText = body;
+    this.phaseBanner.className =
+      'flex fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-3rem)] max-w-md p-4 rounded-xl border shadow-lg backdrop-blur items-center gap-3 ' +
+      toneClasses;
+    this.bannerActive = true;
+    this.updateDisplay();
+  }
+
+  private hideBanner(): void {
+    if (this.nudgeTimeout) {
+      clearTimeout(this.nudgeTimeout);
+      this.nudgeTimeout = null;
+    }
+    this.phaseBanner.classList.add('hidden');
+    this.phaseBanner.classList.remove('flex');
+    this.timerCard.classList.remove('phase-flash');
+    this.bannerActive = false;
+    this.updateDisplay();
+  }
+
+  private scheduleNudge(kind: 'work' | 'break', remaining: number): void {
+    if (this.nudgeTimeout) clearTimeout(this.nudgeTimeout);
+    if (remaining <= 0) return;
+    this.nudgeTimeout = window.setTimeout(() => {
+      if (!this.bannerActive || !this.isRunning || this.currentPhase !== kind) return;
+      this.playChime(kind);
+      this.scheduleNudge(kind, remaining - 1);
+    }, 45000);
+  }
+
+  private async sendSystemNotification(title: string, body: string): Promise<void> {
+    try {
+      const away = document.hidden || !document.hasFocus();
+      if (!away) return;
+
+      if (this.isTauri()) {
+        const { isPermissionGranted, sendNotification } = await import('@tauri-apps/plugin-notification');
+        if (await isPermissionGranted()) {
+          sendNotification({ title: `UberMensch • ${title}`, body });
+        }
+      } else if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(`UberMensch • ${title}`, { body, silent: true });
+      }
+    } catch (err) {
+      console.warn('System notification failed:', err);
+    }
   }
 
   private updateDisplay(): void {
@@ -837,7 +1047,7 @@ class FocusApp {
     const timeFormatted = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     
     this.timerDisplay.innerText = timeFormatted;
-    document.title = `${timeFormatted} • ${this.currentPhase === 'work' ? 'Focus' : 'Break'} | UberMensch`;
+    document.title = `${this.bannerActive ? '🔔 ' : ''}${timeFormatted} • ${this.currentPhase === 'work' ? 'Focus' : 'Break'} | UberMensch`;
 
     const progress = ((this.totalPhaseSeconds - this.secondsRemaining) / this.totalPhaseSeconds) * 100;
     this.progressBar.style.width = `${progress}%`;

@@ -7,3 +7,13 @@
     @apply transition-colors duration-200 antialiased;
   }
 }
+
+/* Gentle pulse on the timer card when the phase switches */
+@keyframes phase-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  50% { box-shadow: 0 0 0 6px var(--flash-color, rgba(16, 185, 129, 0.35)); }
+}
+
+.phase-flash {
+  animation: phase-flash 1.4s ease-in-out 4;
+}
